@@ -19,7 +19,7 @@ const generateToken = (id)=> {
     });
 }
 
-router.post('/register',async(req,res)=>{
+router.post('/register',async(req,res)=>{try{
     const {name , email , password} = req.body;
     if (!name || !email || !password){
         return res.status(400).json({message: "Please provide all required fields"});
@@ -40,9 +40,14 @@ router.post('/register',async(req,res)=>{
     res.cookie('token', token, cookieOptions);
 
     return res.status(201).json({user : newUser.rows[0]});
+    }catch(error){
+        console.error("register error: ",error);
+        return res.status(500).json({message: "Internal server error"});
+    }
 })
 
-router.post('/login',async(req,res)=>{
+
+router.post('/login',async(req,res)=>{try{
     const {email, password} = req.body;
     if(!email || !password){
         return req.status(400).json({message : "please fill all the fields"});
@@ -65,15 +70,24 @@ router.post('/login',async(req,res)=>{
     const token = generateToken(userData.id);
     res.cookie("token",token,cookieOptions);
     res.json({user: userData.id, name:userData.name, email:userData.email});
-})
+    }catch(error){
+        console.error("login error: ",error);
+        return res.status(500).json({message: "Internal server error"});
+}})
 
-router.get('/me',protect, async(req,res)=>{
+router.get('/me',protect, async(req,res)=>{try{
     res.json(req.user);
-})
+    }catch(error){
+        console.error("Data fetch error: ",error);
+        return res.status(500).json({message: "Internal server error"});
+}})
 
-router.post('/logout', async(req,res)=>{
+router.post('/logout', async(req,res)=>{try{
     res.cookie('token', '', {...cookieOptions,maxAge: 1});
     res.json({message: "Logged out successfully"});
-})
+    }catch(error){
+        console.error("logout error: ",error);
+        return res.status(500).json({message: "Internal server error"});
+}})
 
 export default router;
