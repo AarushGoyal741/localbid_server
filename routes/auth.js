@@ -6,88 +6,214 @@ import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
-const cookieOptions={
+const cookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV==='production',
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'Strict',
-    maxAge: 30 * 24 * 60 * 60 * 1000   //30 days
-}
+    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+};
 
-const generateToken = (id)=> {
-    return jwt.sign({id}, process.env.JWT_SECRET,{
-        expiresIn: '30d'
-    });
-}
+const generateToken = (id, accountType) => {
+    return jwt.sign(
+        { id, accountType },
+        process.env.JWT_SECRET,
+        {
+            expiresIn: '30d'
+        }
+    );
+};
 
-router.post('/register',async(req,res)=>{try{
-    const {name , email , password} = req.body;
-    if (!name || !email || !password){
-        return res.status(400).json({message: "Please provide all required fields"});
+// ===================== REGISTER =====================
+
+router.post('/register', async (req, res) => {
+    try {
+        const { name, email, password, accountType } = req.body;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide all required fields"
+            });
+        }
+
+        const userExists = await pool.query(
+            'SELECT id FROM users WHERE email = $1',
+            [email]
+        );
+
+        if (userExists.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "User already exists"
+            });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const newUser = await pool.query(
+            `INSERT INTO users
+            (name, email, password, account_type)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, name, email, account_type`,
+            [name, email, hashedPassword, accountType]
+        );
+
+        const token = generateToken(
+            newUser.rows[0].id,
+            newUser.rows[0].account_type
+        );
+
+        res.cookie('token', token, cookieOptions);
+
+        return res.status(201).json({
+            success: true,
+            message: "Registration successful",
+            user: {
+                id: newUser.rows[0].id,
+                name: newUser.rows[0].name,
+                email: newUser.rows[0].email,
+                accountType: newUser.rows[0].account_type
+            }
+        });
+
+    } catch (error) {
+        console.error("Register Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
     }
+});
 
-    const userExists = await pool.query('SELECT * FROM users WHERE email = $1',[email]);
+// ===================== LOGIN =====================
 
-    if (userExists.rows.length>0){
-        return res.status(400).json({message: "user already exists"});
+router.post('/login', async (req, res) => {
+    try {
+
+        const { email, password, accountType } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Please fill all the fields"
+            });
+        }
+
+        const user = await pool.query(
+            `SELECT
+                id,
+                name,
+                email,
+                password,
+                account_type
+            FROM users
+            WHERE email = $1
+            AND account_type = $2`,
+            [email, accountType]
+        );
+
+        if (user.rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid credentials"
+            });
+        }
+
+        const userData = user.rows[0];
+
+        const isMatch = await bcrypt.compare(
+            password,
+            userData.password
+        );
+
+        if (!isMatch) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid credentials"
+            });
+        }
+
+        const token = generateToken(
+            userData.id,
+            userData.account_type
+        );
+
+        res.cookie("token", token, cookieOptions);
+
+        return res.status(200).json({
+            success: true,
+            message: "Login successful",
+            user: {
+                id: userData.id,
+                name: userData.name,
+                email: userData.email,
+                accountType: userData.account_type
+            }
+        });
+
+    } catch (error) {
+        console.error("Login Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
     }
+});
 
-    const hashedPassword = await bcrypt.hash(password,10);
+// ===================== CURRENT USER =====================
 
-    const newUser = await pool.query('INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id, name, email',[name, email, hashedPassword]);
+router.get('/me', protect, async (req, res) => {
+    try {
 
-    const token = generateToken(newUser.rows[0].id)
+        return res.status(200).json({
+            success: true,
+            user: {
+                id: req.user.id,
+                name: req.user.name,
+                email: req.user.email,
+                accountType: req.user.account_type
+            }
+        });
 
-    res.cookie('token', token, cookieOptions);
+    } catch (error) {
 
-    return res.status(201).json({user : newUser.rows[0]});
-    }catch(error){
-        console.error("register error: ",error);
-        return res.status(500).json({message: "Internal server error"});
+        console.error("User Fetch Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
+
     }
-})
+});
 
+// ===================== LOGOUT =====================
 
-router.post('/login',async(req,res)=>{try{
-    const {email, password} = req.body;
-    if(!email || !password){
-        return req.status(400).json({message : "please fill all the fields"});
+router.post('/logout', async (req, res) => {
+    try {
+
+        res.cookie('token', '', {
+            ...cookieOptions,
+            maxAge: 1
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Logged out successfully"
+        });
+
+    } catch (error) {
+
+        console.error("Logout Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
+
     }
-
-    const user = await pool.query("SELECT * FROM users where email = $1 ",[email]);
-
-    if (user.rows.length === 0){
-        return res.status(400).json({message :"invalid credentials"});
-    }
-
-    const userData= user.rows[0];
-
-    const isMatch = await bcrypt.compare(password, userData.password);
-
-    if (!isMatch){
-        return res.status(400).json({message : "invalid credentials"});
-    }
-
-    const token = generateToken(userData.id);
-    res.cookie("token",token,cookieOptions);
-    res.json({user: userData.id, name:userData.name, email:userData.email});
-    }catch(error){
-        console.error("login error: ",error);
-        return res.status(500).json({message: "Internal server error"});
-}})
-
-router.get('/me',protect, async(req,res)=>{try{
-    res.json(req.user);
-    }catch(error){
-        console.error("Data fetch error: ",error);
-        return res.status(500).json({message: "Internal server error"});
-}})
-
-router.post('/logout', async(req,res)=>{try{
-    res.cookie('token', '', {...cookieOptions,maxAge: 1});
-    res.json({message: "Logged out successfully"});
-    }catch(error){
-        console.error("logout error: ",error);
-        return res.status(500).json({message: "Internal server error"});
-}})
+});
 
 export default router;
